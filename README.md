@@ -2,7 +2,7 @@
 
 A lightweight, serverless event-management frontend built with Next.js. Supports hierarchical roles, dynamic registration forms, and QR-based check-ins. This repository was forked from [HSP](https://hsp-ec.xyz) by [ACM PESUECC](https://pesuecc.acm.org).
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fhomebrew-ec-foss%2Feloop)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Facmpesuecc%2Feloop-but-github)
 
 <details>
 <summary>Set these environments after clicking Deploy to Vercel</summary>
