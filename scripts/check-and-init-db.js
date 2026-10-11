@@ -206,6 +206,9 @@ async function checkAndInitDb() {
       console.log('Database tables and indexes created successfully');
     } else {
       console.log('Database tables already exist');
+      // Repair schemas made by older runtime initializers without replacing their data.
+      const { initDatabase } = await import('../src/lib/db/client.ts');
+      await initDatabase();
     }
 
     return true;

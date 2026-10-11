@@ -28,7 +28,7 @@ export async function POST(
     
     // Get the event to verify it exists
     const eventResult = await turso.execute({
-      sql: 'SELECT is_registration_open FROM events WHERE id = ?',
+      sql: 'SELECT is_registration_open, organizer_id FROM events WHERE id = ?',
       args: [eventId]
     });
     
@@ -37,6 +37,10 @@ export async function POST(
         { error: 'Event not found' },
         { status: 404 }
       );
+    }
+
+    if (session.user.role === 'organizer' && eventResult.rows[0].organizer_id !== session.user.id) {
+      return NextResponse.json({ error: 'Only the event organizer or an admin can toggle registration' }, { status: 403 });
     }
     
     const body = await request.json();

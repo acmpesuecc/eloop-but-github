@@ -15,10 +15,9 @@ const { getOrganizerVolunteers, hasVolunteerPrivileges, updateUserRole } = await
 
 try {
   await initDatabase();
-  // The alternative bootstrap creates the legacy event schema. Supply the
-  // existing checkpoint columns so this check can exercise live controls.
-  await turso.execute(`ALTER TABLE events ADD COLUMN checkpoints TEXT DEFAULT '["Checkin"]'`);
-  await turso.execute(`ALTER TABLE events ADD COLUMN unlocked_checkpoints TEXT DEFAULT '[]'`);
+  // The alternative bootstrap creates the legacy event schema historically. Supply the
+  // existing checkpoint columns through initialization so this check can exercise live controls.
+  assert.equal((await turso.execute(`PRAGMA table_info(events)`)).rows.some((row: Record<string, unknown>) => row.name === 'checkpoints'), true);
   await turso.execute(`INSERT INTO users (id, email, name, role, organizer_id, created_at, updated_at) VALUES
     ('admin', 'admin@example.com', 'Admin', 'admin', NULL, 1, 1),
     ('person', 'person@example.com', 'Person', 'participant', NULL, 1, 1),

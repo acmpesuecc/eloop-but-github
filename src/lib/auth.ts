@@ -89,12 +89,9 @@ export const authConfig: NextAuthOptions = {
           };
         } catch (error) {
           console.error("Error in JWT callback:", error);
-          // Return basic token data to prevent complete auth failure
-          return {
-            ...token,
-            id: crypto.randomUUID(),
-            role: 'participant'
-          };
+          // Return basic token data to prevent complete auth failure was the old fallback.
+          // Fail closed rather than issue a session without a database-backed identity.
+          throw new Error('Unable to authenticate user');
         }
       }
 

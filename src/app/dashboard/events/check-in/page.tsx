@@ -42,6 +42,7 @@ export default function CheckInPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<{
     qrToken: string;
+    eventId: string;
     checkpoint: string;
     skippedCheckpoints: string[];
     user?: CheckInResponse['user'];
@@ -252,9 +253,10 @@ export default function CheckInPage() {
   const handleScan = async (
     qrData: string,
     checkpoint = selectedCheckpoint,
-    approveSkippedCheckpoints = false
+    approveSkippedCheckpoints = false,
+    eventId = selectedEvent
   ) => {
-    if (!checkpoint || processingRef.current || (pendingApproval && !approveSkippedCheckpoints)) return;
+    if (!eventId || !checkpoint || processingRef.current || (pendingApproval && !approveSkippedCheckpoints)) return;
     processingRef.current = true;
 
     try {
@@ -272,6 +274,7 @@ export default function CheckInPage() {
         },
         body: JSON.stringify({
           qrToken: qrData,
+          eventId,
           checkpoint,
           approveSkippedCheckpoints
         }),
@@ -288,6 +291,7 @@ export default function CheckInPage() {
       if (data.requiresApproval) {
         setPendingApproval({
           qrToken: qrData,
+          eventId,
           checkpoint,
           skippedCheckpoints: data.skippedCheckpoints,
           user: data.user
@@ -362,7 +366,7 @@ export default function CheckInPage() {
                 Cancel
               </button>
               <button
-                onClick={() => handleScan(pendingApproval.qrToken, pendingApproval.checkpoint, true)}
+                onClick={() => handleScan(pendingApproval.qrToken, pendingApproval.checkpoint, true, pendingApproval.eventId)}
                 disabled={isProcessing}
                 className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
               >

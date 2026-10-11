@@ -39,7 +39,7 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(url);
     }
 
-    if (path.startsWith('/dashboard/events/create') && userRole !== 'organizer') {
+    if (path.startsWith('/dashboard/events/create') && userRole !== 'organizer' && userRole !== 'admin') {
       url.pathname = '/dashboard';
       return NextResponse.redirect(url);
     }

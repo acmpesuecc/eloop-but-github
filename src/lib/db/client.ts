@@ -71,8 +71,16 @@ export async function initDatabase() {
         name TEXT NOT NULL,
         description TEXT,
         date INTEGER NOT NULL,
+        start_date TEXT,
+        end_date TEXT,
+        registration_close_date TEXT,
         location TEXT,
+        image_url TEXT,
         organizer_id TEXT NOT NULL,
+        checkpoints TEXT DEFAULT '["Checkin"]',
+        unlocked_checkpoints TEXT DEFAULT '[]',
+        is_registration_open INTEGER DEFAULT 1,
+        is_team_formation_open INTEGER DEFAULT 0,
         form_schema TEXT NOT NULL, -- JSON string of form schema
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
@@ -90,6 +98,8 @@ export async function initDatabase() {
         status TEXT NOT NULL,
         qr_code TEXT NOT NULL UNIQUE,
         checkpoint_checkins TEXT DEFAULT '[]', -- JSON array of checkpoint check-ins with status
+        checked_in_by TEXT,
+        checked_in_at INTEGER,
         approved_by TEXT,
         approved_at INTEGER,
         rejected_by TEXT,
@@ -98,8 +108,27 @@ export async function initDatabase() {
         updated_at INTEGER NOT NULL,
         FOREIGN KEY(event_id) REFERENCES events(id),
         FOREIGN KEY(user_id) REFERENCES users(id),
+        FOREIGN KEY(checked_in_by) REFERENCES users(id),
         FOREIGN KEY(approved_by) REFERENCES users(id),
         FOREIGN KEY(rejected_by) REFERENCES users(id)
+      )
+    `);
+
+    // Scan logs table
+    await turso.execute(`
+      CREATE TABLE IF NOT EXISTS scan_logs (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        volunteer_id TEXT NOT NULL,
+        qr_code TEXT,
+        checkpoint TEXT,
+        scan_status TEXT NOT NULL,
+        error_message TEXT,
+        user_id TEXT,
+        registration_id TEXT,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY(event_id) REFERENCES events(id),
+        FOREIGN KEY(volunteer_id) REFERENCES users(id)
       )
     `);
 
@@ -125,6 +154,7 @@ export async function initDatabase() {
         event_id TEXT NOT NULL,
         name TEXT NOT NULL, -- e.g., "Round 1 Review", "Round 2 Review"
         round_number INTEGER NOT NULL, -- ordering of rounds
+        grading_form_schema TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         FOREIGN KEY(event_id) REFERENCES events(id)
@@ -149,6 +179,45 @@ export async function initDatabase() {
         FOREIGN KEY(graded_by) REFERENCES users(id)
       )
     `);
+
+    // CREATE TABLE IF NOT EXISTS cannot repair databases made by older initializers.
+    // Add only missing columns, preserving existing rows, roles, and checkpoint state.
+    const additions: Record<string, Record<string, string>> = {
+      events: {
+        start_date: 'TEXT', end_date: 'TEXT', registration_close_date: 'TEXT', image_url: 'TEXT',
+        checkpoints: `TEXT DEFAULT '["Checkin"]'`, unlocked_checkpoints: `TEXT DEFAULT '[]'`,
+        is_registration_open: 'INTEGER DEFAULT 1', is_team_formation_open: 'INTEGER DEFAULT 0'
+      },
+      registrations: {
+        checkpoint_checkins: `TEXT DEFAULT '[]'`, checked_in_by: 'TEXT', checked_in_at: 'INTEGER',
+        approved_by: 'TEXT', approved_at: 'INTEGER', rejected_by: 'TEXT', rejected_at: 'INTEGER'
+      },
+      scoring_rounds: { grading_form_schema: 'TEXT' }
+    };
+    for (const [table, columns] of Object.entries(additions)) {
+      const info = await turso.execute(`PRAGMA table_info(${table})`);
+      const existing = new Set(info.rows.map((row: Record<string, unknown>) => row.name));
+      for (const [column, definition] of Object.entries(columns)) {
+        if (!existing.has(column)) {
+          try {
+            await turso.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+          } catch (error) {
+            // Another initializer may have added the column after the schema read.
+            const updated = await turso.execute(`PRAGMA table_info(${table})`);
+            if (!updated.rows.some((row: Record<string, unknown>) => row.name === column)) throw error;
+          }
+        }
+      }
+    }
+
+    for (const sql of [
+      'CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)',
+      'CREATE INDEX IF NOT EXISTS idx_scan_logs_event_id ON scan_logs(event_id)',
+      'CREATE INDEX IF NOT EXISTS idx_scan_logs_volunteer_id ON scan_logs(volunteer_id)',
+      'CREATE INDEX IF NOT EXISTS idx_scan_logs_status ON scan_logs(scan_status)'
+    ]) {
+      await turso.execute(sql);
+    }
 
     console.log('Database initialized successfully');
   } catch (error) {

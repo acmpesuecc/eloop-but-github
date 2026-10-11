@@ -16,6 +16,10 @@ export async function POST(request: Request) {
         { status: 401 }
       );
     }
+
+    if (session.user.role !== 'applicant') {
+      return NextResponse.json({ error: 'Only applicants can register for events.' }, { status: 403 });
+    }
     
     // Parse request body
     const body = await request.json();

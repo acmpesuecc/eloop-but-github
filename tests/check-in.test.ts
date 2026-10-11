@@ -6,10 +6,12 @@ let authenticated = true;
 let authorized = true;
 let validQR = true;
 let role = 'admin';
+let scannerUserId = 'scanner';
 let userRole = 'participant';
 let userExists = true;
 let organizerId: string | undefined;
 let eventExists = true;
+let registrationOpen = false;
 let unlockedCheckpoints = ['Checkin', 'Lunch', 'Dinner'];
 let registration = {
   id: 'registration', eventId: 'event', userId: 'participant', qrCode: 'qr',
@@ -20,7 +22,13 @@ const updateRegistration = mock(async (_qr: string, checkpoint: string) => ({
   status: 'checked-in',
   checkpointCheckIns: [...registration.checkpointCheckIns, { checkpoint }]
 }));
-const execute = mock(async () => ({ rows: [registration] }));
+const execute = mock(async (input?: { sql: string }) => ({ rows: input?.sql.includes('FROM events')
+  ? eventExists ? [{ id: 'event', organizer_id: 'owner', is_registration_open: 1 }] : []
+  : [registration] }));
+const createRegistration = mock(async (input: Record<string, unknown>) => ({
+  ...input, id: 'new-registration', status: 'pending', createdAt: new Date()
+}));
+const generateRegistrationQR = mock(async () => 'qr');
 const currentUser = () => ({ id: 'participant', name: 'Participant', email: 'participant@example.com', role: userRole, organizerId });
 const promoteVolunteer = mock(async (_userId: string, newRole: string, newOrganizerId?: string) => {
   userRole = newRole;
@@ -35,7 +43,7 @@ const organizerVolunteers = mock(async (_organizerId: string) => userRole === 'v
 const startCheckpoint = mock(async (_eventId: string, checkpoint: string) => ({ unlockedCheckpoints: ['Checkin', checkpoint] }));
 const stopCheckpoint = mock(async (_eventId: string, checkpoint: string) => ({ unlockedCheckpoints: unlockedCheckpoints.filter(value => value !== checkpoint) }));
 
-mock.module('@/lib/auth', () => ({ auth: async () => authenticated ? { user: { id: 'scanner', role } } : null }));
+mock.module('@/lib/auth', () => ({ auth: async () => authenticated ? { user: { id: scannerUserId, role } } : null }));
 mock.module('@/lib/db/user', () => ({
   hasVolunteerPrivileges: async () => authorized,
   hasOrganizerPrivileges: async () => authorized && ['admin', 'organizer'].includes(role),
@@ -45,25 +53,33 @@ mock.module('@/lib/db/user', () => ({
   getOrganizerVolunteers: organizerVolunteers,
   getAllUsers: async () => [currentUser()]
 }));
-mock.module('@/lib/qr', () => ({ verifyQRCode: async () => validQR ? { eventId: 'event' } : null }));
+mock.module('@/lib/qr', () => ({
+  verifyQRCode: async () => validQR ? { eventId: 'event' } : null,
+  generateQRCodeForStorage: generateRegistrationQR
+}));
 mock.module('@/lib/db/client', () => ({ turso: { execute } }));
 mock.module('@/lib/db/event', () => ({
   getEventById: async () => eventExists ? {
     id: 'event', name: 'Event', organizerId: 'owner', checkpoints: ['Checkin', 'Lunch', 'Dinner'],
-    unlockedCheckpoints, startDate: new Date('2020-01-01'), endDate: new Date('2020-01-02'), isRegistrationOpen: false
+    unlockedCheckpoints, startDate: new Date('2020-01-01'), endDate: new Date('2020-01-02'),
+    isRegistrationOpen: registrationOpen, formSchema: { fields: [] }
   } : null,
   unlockCheckpoint: startCheckpoint,
   lockCheckpoint: stopCheckpoint
 }));
 mock.module('@/lib/db/registration', () => ({
   rowToRegistration: () => registration,
-  checkInParticipantAtCheckpoint: updateRegistration
+  checkInParticipantAtCheckpoint: updateRegistration,
+  createRegistration
 }));
 
 const { POST } = await import('../src/app/api/events/check-in/route');
 const { POST: manageCheckpoint } = await import('../src/app/api/events/[id]/unlock-checkpoint/route');
 const { GET: listVolunteers } = await import('../src/app/api/volunteers/route');
 const { POST: assignVolunteer } = await import('../src/app/api/volunteer/create/route');
+const { POST: registerForEvent } = await import('../src/app/api/events/register/route');
+const { POST: toggleRegistration } = await import('../src/app/api/events/[id]/toggle-registration/route');
+const { proxy } = await import('../src/proxy');
 const list = () => listVolunteers(new Request('http://localhost/api/volunteers?eventId=event'));
 const routeParams = { params: Promise.resolve({ id: 'event' }) };
 const control = (checkpoint: unknown, action: unknown) => manageCheckpoint(new NextRequest('http://localhost/api/events/event/unlock-checkpoint', {
@@ -72,16 +88,25 @@ const control = (checkpoint: unknown, action: unknown) => manageCheckpoint(new N
 const assign = (body: unknown = { userId: 'participant' }) => assignVolunteer(new Request('http://localhost/api/volunteer/create', {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventId: 'event', ...body as Record<string, unknown> })
 }));
-const scan = (checkpoint: string, approval?: unknown) => POST(new Request('http://localhost/api/events/check-in', {
+const scan = (checkpoint: string, approval?: unknown, eventId: unknown = 'event') => POST(new Request('http://localhost/api/events/check-in', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ qrToken: 'qr', checkpoint, approveSkippedCheckpoints: approval })
+  body: JSON.stringify({ qrToken: 'qr', checkpoint, approveSkippedCheckpoints: approval, eventId })
 }));
+const register = () => registerForEvent(new Request('http://localhost/api/events/register', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ eventId: 'event', responses: {} })
+}));
+const toggle = () => toggleRegistration(new NextRequest('http://localhost/api/events/event/toggle-registration', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isOpen: true })
+}), routeParams);
 
 beforeEach(() => {
   authenticated = authorized = validQR = true;
   userExists = eventExists = true;
   role = 'admin';
+  scannerUserId = 'scanner';
+  registrationOpen = false;
   userRole = 'participant';
   organizerId = undefined;
   unlockedCheckpoints = ['Checkin', 'Lunch', 'Dinner'];
@@ -93,6 +118,84 @@ beforeEach(() => {
   organizerVolunteers.mockClear();
   startCheckpoint.mockClear();
   stopCheckpoint.mockClear();
+  createRegistration.mockClear();
+  generateRegistrationQR.mockClear();
+});
+
+describe('rough-edge regressions', () => {
+  test('admin and organizer can reach event creation; other roles cannot', async () => {
+    for (const allowedRole of ['admin', 'organizer']) {
+      role = allowedRole;
+      const response = await proxy(new NextRequest('http://localhost/dashboard/events/create'));
+      expect(response.headers.get('location')).toBeNull();
+    }
+    for (const otherRole of ['applicant', 'participant', 'volunteer', 'mentor']) {
+      role = otherRole;
+      expect((await proxy(new NextRequest('http://localhost/dashboard/events/create'))).headers.get('location')).toBe('http://localhost/dashboard');
+    }
+  });
+
+  test('registration toggles require event ownership unless admin', async () => {
+    role = 'organizer';
+    expect((await toggle()).status).toBe(403);
+    expect(execute.mock.calls.some(([input]) => input?.sql.includes('UPDATE events'))).toBe(false);
+    scannerUserId = 'owner';
+    expect((await toggle()).status).toBe(200);
+    role = 'admin';
+    scannerUserId = 'scanner';
+    expect((await toggle()).status).toBe(200);
+  });
+
+  test('registration API enforces the same applicant restriction as the UI', async () => {
+    registrationOpen = true;
+    for (const otherRole of ['participant', 'volunteer', 'mentor', 'organizer', 'admin']) {
+      role = otherRole;
+      expect((await register()).status).toBe(403);
+    }
+    expect(createRegistration).not.toHaveBeenCalled();
+    expect(generateRegistrationQR).not.toHaveBeenCalled();
+    role = 'applicant';
+    expect((await register()).status).toBe(200);
+    expect(createRegistration).toHaveBeenCalledTimes(1);
+  });
+
+  test('scans for another selected event cannot check in, even with approval', async () => {
+    expect((await scan('Checkin', false, 'other-event')).status).toBe(400);
+    expect((await scan('Dinner', true, 'other-event')).status).toBe(400);
+    expect(updateRegistration).not.toHaveBeenCalled();
+    expect((await scan('Checkin', false, 'event')).status).toBe(200);
+  });
+
+  test('invalid event selections are rejected; legacy callers without a selector still work', async () => {
+    for (const eventId of ['', ' ', 123, null]) {
+      expect((await scan('Checkin', false, eventId)).status).toBe(400);
+    }
+    expect(updateRegistration).not.toHaveBeenCalled();
+    const response = await POST(new Request('http://localhost/api/events/check-in', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ qrToken: 'qr', checkpoint: 'Checkin' })
+    }));
+    expect(response.status).toBe(200);
+  });
+
+  test('applicant registration still respects manual closure and authentication', async () => {
+    role = 'applicant';
+    expect((await register()).status).toBe(400);
+    authenticated = false;
+    expect((await register()).status).toBe(401);
+    expect(createRegistration).not.toHaveBeenCalled();
+  });
+
+  test('registration toggle rejects missing events and unprivileged roles', async () => {
+    eventExists = false;
+    expect((await toggle()).status).toBe(404);
+    eventExists = true;
+    role = 'participant';
+    expect((await toggle()).status).toBe(403);
+    authenticated = false;
+    expect((await toggle()).status).toBe(401);
+    expect(execute.mock.calls.some(([input]) => input?.sql.includes('UPDATE events'))).toBe(false);
+  });
 });
 
 describe('manual checkpoint controls', () => {

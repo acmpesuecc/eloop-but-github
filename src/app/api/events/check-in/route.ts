@@ -31,7 +31,12 @@ export async function POST(request: Request) {
     
     // Parse request body
     const body = await request.json();
-    const { qrToken, checkpoint, approveSkippedCheckpoints } = body;
+    const { qrToken, checkpoint, approveSkippedCheckpoints, eventId } = body;
+
+    // Older callers without an event selector can still use the QR's event.
+    if (eventId !== undefined && (typeof eventId !== 'string' || !eventId.trim())) {
+      return NextResponse.json({ error: 'Invalid event ID' }, { status: 400 });
+    }
     
     if (!qrToken) {
       return NextResponse.json(
@@ -62,6 +67,10 @@ export async function POST(request: Request) {
         { error: 'Invalid or tampered QR code' },
         { status: 400 }
       );
+    }
+
+    if (eventId !== undefined && qrData.eventId !== eventId) {
+      return NextResponse.json({ error: 'This QR code is for a different event' }, { status: 400 });
     }
 
     // Look up registration by QR token
