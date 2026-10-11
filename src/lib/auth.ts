@@ -1,6 +1,6 @@
 import NextAuth from "next-auth";
 import type { NextAuthOptions } from "next-auth";
-import GoogleProvider from "next-auth/providers/google";
+import GitHubProvider from "next-auth/providers/github";
 import { getUserByEmail, createUser } from "@/lib/db/user";
 import { UserRole } from "@/types";
 import { getMissingEnvVars } from "@/lib/env";
@@ -28,31 +28,18 @@ declare module "next-auth" {
 
 export const authConfig: NextAuthOptions = {
   providers: [
-    // Keep Google provider for when we set up proper OAuth
-    GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID || "",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
-      authorization: {
-        params: {
-          access_type: "offline",
-          response_type: "code"
-        }
-      },
-      // Add profile handler to prevent configuration errors
-      profile(profile) {
-        return {
-          id: profile.sub || profile.id || crypto.randomUUID(),
-          name: profile.name || profile.given_name || "Unknown User",
-          email: profile.email || "unknown@example.com",
-          image: profile.picture || null,
-          role: "participant"
-        };
-      }
+    GitHubProvider({
+      clientId: process.env.GITHUB_CLIENT_ID || "",
+      clientSecret: process.env.GITHUB_CLIENT_SECRET || "",
     }),
   ],
   // Disable debug to reduce noise
   debug: false,
   callbacks: {
+    // The database and admin assignment require a real email address.
+    async signIn({ user }) {
+      return Boolean(user.email);
+    },
     async jwt({ token, user }) {
       // First time sign in
       if (user) {
