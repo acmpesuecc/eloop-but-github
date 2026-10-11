@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     
     // Parse request body
     const body = await request.json();
-    const { qrToken, checkpoint } = body;
+    const { qrToken, checkpoint, approveSkippedCheckpoints } = body;
     
     if (!qrToken) {
       return NextResponse.json(
@@ -129,6 +129,30 @@ export async function POST(request: Request) {
       );
     }
 
+    // Approval of skipped checkpoints must not bypass registration approval.
+    if (registration.status !== 'approved' && registration.status !== 'checked-in') {
+      return NextResponse.json(
+        { error: 'Registration must be approved before check-in' },
+        { status: 403 }
+      );
+    }
+
+    const skippedCheckpoints = checkpoints
+      .slice(0, checkpoints.indexOf(checkpoint))
+      .filter(previous => !checkpointCheckIns.some(checkIn => checkIn.checkpoint === previous));
+
+    if (skippedCheckpoints.length > 0 && approveSkippedCheckpoints !== true) {
+      const user = await getUserById(registration.userId);
+      return NextResponse.json({
+        success: false,
+        requiresApproval: true,
+        skippedCheckpoints,
+        checkpoint,
+        user: user ? { id: user.id, name: user.name, email: user.email } : undefined,
+        registration: { ...registration, eventName: event.name }
+      });
+    }
+
     const updatedRegistration = await checkInParticipantAtCheckpoint(
       registration.qrCode, 
       checkpoint, 
@@ -149,6 +173,9 @@ export async function POST(request: Request) {
       qrCode: qrToken,
       checkpoint,
       scanStatus: 'success',
+      errorMessage: skippedCheckpoints.length > 0
+        ? `Skipped checkpoints approved: ${skippedCheckpoints.join(', ')}`
+        : undefined,
       userId: registration.userId,
       registrationId: registration.id
     });

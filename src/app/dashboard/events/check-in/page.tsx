@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { GenericQRScanner } from '@/components/qr/GenericQRScanner';
-import { Check, X, RefreshCw, User, Calendar, MapPin } from 'lucide-react';
+import { Check, X, RefreshCw, User, Calendar, MapPin, AlertTriangle } from 'lucide-react';
 
 interface CheckpointCheckIn {
   checkpoint: string;
@@ -14,6 +14,8 @@ interface CheckpointCheckIn {
 
 interface CheckInResponse {
   success: boolean;
+  requiresApproval?: boolean;
+  skippedCheckpoints?: string[];
   user?: {
     id: string;
     name: string;
@@ -38,6 +40,14 @@ export default function CheckInPage() {
   const [isScanning, setIsScanning] = useState(true);
   const [scanResult, setScanResult] = useState<CheckInResponse | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [pendingApproval, setPendingApproval] = useState<{
+    qrToken: string;
+    checkpoint: string;
+    skippedCheckpoints: string[];
+    user?: CheckInResponse['user'];
+  } | null>(null);
+  const approvalDialogRef = useRef<HTMLDialogElement | null>(null);
+  const processingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [recentCheckIns, setRecentCheckIns] = useState<CheckInResponse[]>([]);
   const [selectedCheckpoint, setSelectedCheckpoint] = useState<string>('');
@@ -235,11 +245,25 @@ export default function CheckInPage() {
     }
   };
 
-  const handleScan = async (qrData: string) => {
-    if (isProcessing) return;
+  useEffect(() => {
+    if (pendingApproval) {
+      approvalDialogRef.current?.showModal();
+    } else {
+      approvalDialogRef.current?.close();
+    }
+  }, [pendingApproval]);
+
+  const handleScan = async (
+    qrData: string,
+    checkpoint = selectedCheckpoint,
+    approveSkippedCheckpoints = false
+  ) => {
+    if (processingRef.current || (pendingApproval && !approveSkippedCheckpoints)) return;
+    processingRef.current = true;
 
     try {
       setIsProcessing(true);
+      setPendingApproval(null);
       setError(null);
       setScanResult(null);
       setIsScanning(false);
@@ -252,7 +276,8 @@ export default function CheckInPage() {
         },
         body: JSON.stringify({
           qrToken: qrData,
-          checkpoint: selectedCheckpoint
+          checkpoint,
+          approveSkippedCheckpoints
         }),
       });
 
@@ -261,6 +286,16 @@ export default function CheckInPage() {
       if (!response.ok) {
         setError(data.error || 'Failed to process check-in');
         playErrorSound();
+        return;
+      }
+
+      if (data.requiresApproval) {
+        setPendingApproval({
+          qrToken: qrData,
+          checkpoint,
+          skippedCheckpoints: data.skippedCheckpoints,
+          user: data.user
+        });
         return;
       }
 
@@ -275,12 +310,14 @@ export default function CheckInPage() {
       setError(errorMsg);
       playErrorSound();
     } finally {
+      processingRef.current = false;
       setIsProcessing(false);
     }
   };
 
   // Reset scanner
   const resetScanner = () => {
+    setPendingApproval(null);
     setIsScanning(true);
     setScanResult(null);
     setError(null);
@@ -303,6 +340,42 @@ export default function CheckInPage() {
 
   return (
     <div className="mx-6 py-6 max-w-7xl">
+      <dialog
+        ref={approvalDialogRef}
+        aria-labelledby="skipped-checkpoints-title"
+        aria-describedby="skipped-checkpoints-description"
+        onCancel={resetScanner}
+        className="m-auto w-full max-w-md rounded-2xl border border-amber-200 bg-white p-6 shadow-xl backdrop:bg-black/50"
+      >
+        {pendingApproval && (
+          <>
+            <AlertTriangle className="w-10 h-10 text-amber-600 mb-3" aria-hidden="true" />
+            <h2 id="skipped-checkpoints-title" className="text-xl font-semibold text-slate-900 mb-2">
+              Skipped Checkpoints
+            </h2>
+            <p id="skipped-checkpoints-description" className="text-sm text-slate-600">
+              {pendingApproval.user?.name || 'This participant'} has skipped checkpoints.
+              Press Approve to check them in at {pendingApproval.checkpoint} anyway.
+              Skipped checkpoints will remain unscanned.
+            </p>
+            <ul className="list-disc pl-5 my-4 text-sm text-amber-800">
+              {pendingApproval.skippedCheckpoints.map(checkpoint => <li key={checkpoint}>{checkpoint}</li>)}
+            </ul>
+            <div className="flex justify-end gap-3">
+              <button autoFocus onClick={resetScanner} className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50">
+                Cancel
+              </button>
+              <button
+                onClick={() => handleScan(pendingApproval.qrToken, pendingApproval.checkpoint, true)}
+                disabled={isProcessing}
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                Approve
+              </button>
+            </div>
+          </>
+        )}
+      </dialog>
       <div className="mb-6">
         <h1 className="text-3xl font-semibold text-slate-900">Check-In Scanner</h1>
         <p className="text-slate-500 mt-1">Scan participant QR codes to check them into the event</p>
@@ -401,7 +474,7 @@ export default function CheckInPage() {
             <div className="bg-amber-50 border border-amber-200 rounded-2xl shadow-sm p-4">
               <p className="text-xs text-amber-700 flex items-start gap-2">
                 <span className="text-base">⚠️</span>
-                <span className="flex-1">Participants must complete checkpoints in sequential order</span>
+                <span className="flex-1">Skipped checkpoints require approval on the scanner before check-in.</span>
               </p>
             </div>
           )}
@@ -413,7 +486,7 @@ export default function CheckInPage() {
           <div className={isScanning ? '' : 'hidden'}>
             <GenericQRScanner
               key={scannerKey}
-              onScan={handleScan}
+              onScan={(qrData) => handleScan(qrData)}
               scannerTitle="Check-In Scanner"
               scannerDescription="Position QR code within frame"
               isActive={isScanning}
