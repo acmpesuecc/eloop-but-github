@@ -1,4 +1,3 @@
-import { createClient } from '@libsql/client';
 import { config as loadDotenv } from 'dotenv';
 import fs from 'fs';
 import path from 'path';
@@ -19,6 +18,10 @@ for (const f of envFiles) {
 // Read and validate Turso environment variables early but do not fail imports
 const TURSO_URL = process.env.TURSO_DATABASE_URL || process.env.DATABASE_URL;
 const TURSO_AUTH = process.env.TURSO_AUTH_TOKEN;
+
+const { createClient } = process.env.VERCEL === '1'
+  ? await import('@libsql/client/web')
+  : await import('@libsql/client');
 
 if (!TURSO_URL) {
   console.warn('TURSO_DATABASE_URL (or DATABASE_URL) environment variable is not set. Database features will be disabled — running in limited local mode.');

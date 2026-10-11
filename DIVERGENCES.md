@@ -134,6 +134,10 @@ The DnD packages, Heroicons, Vercel analytics/speed insights, QR scanner, QRCode
 
 Deploy `package.json`, `bun.lock`, and the two environment-reader changes together using `bun install --frozen-lockfile`, then build. No mixed-version database transition is needed: persistent data, roles, sessions, and checkpoint state retain their existing formats. Rollback uses the previous manifest/lockfile and environment-reader versions from commit `163d116`, followed by frozen-lockfile installation and a rebuild; no database rollback or data deletion is required. Older in-flight application instances can continue reading the unchanged schema.
 
+## Vercel database client
+
+When `VERCEL=1`, the runtime database module and build initializer select `@libsql/client/web` rather than the native Node entry point. Other environments retain `@libsql/client` so local `file:` databases and integration checks continue to work. Vercel requires a remote Turso/LibSQL URL; the web client does not support local SQLite files. Existing URL/token configuration, schema, and user roles are unchanged.
+
 ## Validation
 
 ```bash
@@ -143,6 +147,7 @@ bun tests/auth-regression.ts
 bun tests/schema-regression.ts
 bun tests/lint-config.ts
 bun tests/dependency-migration.tsx
+bun tests/vercel-db-client.ts
 bunx tsc --noEmit
 bun run build
 ```

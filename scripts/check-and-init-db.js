@@ -41,7 +41,9 @@ async function checkAndInitDb() {
     return false;
   }
 
-  const { createClient } = await import('@libsql/client');
+  const { createClient } = process.env.VERCEL === '1'
+    ? await import('@libsql/client/web')
+    : await import('@libsql/client');
   const turso = createClient({
     url: tursoUrl,
     authToken: process.env.TURSO_AUTH_TOKEN,
