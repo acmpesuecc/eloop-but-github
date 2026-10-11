@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getOrganizerVolunteers, getAllUsers } from '@/lib/db/user';
+import { getEventById } from '@/lib/db/event';
 
 /**
  * GET /api/volunteers
  * Get volunteers (organizer sees their volunteers, admin sees all)
  */
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const session = await auth();
     
@@ -27,6 +28,19 @@ export async function GET() {
     }
 
     let volunteers;
+    const eventId = new URL(request.url).searchParams.get('eventId');
+    if (eventId) {
+      const event = await getEventById(eventId);
+      if (!event) {
+        return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+      }
+      if (role === 'organizer' && event.organizerId !== session.user.id) {
+        return NextResponse.json({ error: 'Only the event organizer or an admin can view its volunteers' }, { status: 403 });
+      }
+      // Event staffing uses the existing organizer association, not a separate roster.
+      volunteers = await getOrganizerVolunteers(event.organizerId);
+      return NextResponse.json({ volunteers });
+    }
     
     if (role === 'admin') {
       const allUsers = await getAllUsers();

@@ -130,6 +130,14 @@ export async function POST(request: Request) {
     }
 
     // Approval of skipped checkpoints must not bypass registration approval.
+    // Manual checkpoint state applies to every scanner, including admins.
+    if (!event.unlockedCheckpoints?.includes(checkpoint)) {
+      return NextResponse.json(
+        { error: `Checkpoint is stopped: ${checkpoint}. Ask an admin or the event organizer to start it.` },
+        { status: 403 }
+      );
+    }
+
     if (registration.status !== 'approved' && registration.status !== 'checked-in') {
       return NextResponse.json(
         { error: 'Registration must be approved before check-in' },

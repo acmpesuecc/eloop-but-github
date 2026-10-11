@@ -1,9 +1,16 @@
 /// <reference types="bun" />
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import { NextRequest } from 'next/server';
 
 let authenticated = true;
 let authorized = true;
 let validQR = true;
+let role = 'admin';
+let userRole = 'participant';
+let userExists = true;
+let organizerId: string | undefined;
+let eventExists = true;
+let unlockedCheckpoints = ['Checkin', 'Lunch', 'Dinner'];
 let registration = {
   id: 'registration', eventId: 'event', userId: 'participant', qrCode: 'qr',
   status: 'approved', checkpointCheckIns: [] as { checkpoint: string }[]
@@ -14,23 +21,57 @@ const updateRegistration = mock(async (_qr: string, checkpoint: string) => ({
   checkpointCheckIns: [...registration.checkpointCheckIns, { checkpoint }]
 }));
 const execute = mock(async () => ({ rows: [registration] }));
+const currentUser = () => ({ id: 'participant', name: 'Participant', email: 'participant@example.com', role: userRole, organizerId });
+const promoteVolunteer = mock(async (_userId: string, newRole: string, newOrganizerId?: string) => {
+  userRole = newRole;
+  if (newOrganizerId !== undefined) organizerId = newOrganizerId;
+  return currentUser();
+});
+const assignOrganizer = mock(async (_userId: string, newOrganizerId: string) => {
+  organizerId = newOrganizerId;
+  return currentUser();
+});
+const organizerVolunteers = mock(async (_organizerId: string) => userRole === 'volunteer' ? [currentUser()] : []);
+const startCheckpoint = mock(async (_eventId: string, checkpoint: string) => ({ unlockedCheckpoints: ['Checkin', checkpoint] }));
+const stopCheckpoint = mock(async (_eventId: string, checkpoint: string) => ({ unlockedCheckpoints: unlockedCheckpoints.filter(value => value !== checkpoint) }));
 
-mock.module('@/lib/auth', () => ({ auth: async () => authenticated ? { user: { id: 'scanner' } } : null }));
+mock.module('@/lib/auth', () => ({ auth: async () => authenticated ? { user: { id: 'scanner', role } } : null }));
 mock.module('@/lib/db/user', () => ({
   hasVolunteerPrivileges: async () => authorized,
-  getUserById: async () => ({ id: 'participant', name: 'Participant', email: 'participant@example.com' })
+  hasOrganizerPrivileges: async () => authorized && ['admin', 'organizer'].includes(role),
+  getUserById: async () => userExists ? currentUser() : null,
+  updateUserRole: promoteVolunteer,
+  assignVolunteerToOrganizer: assignOrganizer,
+  getOrganizerVolunteers: organizerVolunteers,
+  getAllUsers: async () => [currentUser()]
 }));
 mock.module('@/lib/qr', () => ({ verifyQRCode: async () => validQR ? { eventId: 'event' } : null }));
 mock.module('@/lib/db/client', () => ({ turso: { execute } }));
-mock.module('@/lib/db/event', () => ({ getEventById: async () => ({
-  id: 'event', name: 'Event', checkpoints: ['Checkin', 'Lunch', 'Dinner']
-}) }));
+mock.module('@/lib/db/event', () => ({
+  getEventById: async () => eventExists ? {
+    id: 'event', name: 'Event', organizerId: 'owner', checkpoints: ['Checkin', 'Lunch', 'Dinner'],
+    unlockedCheckpoints, startDate: new Date('2020-01-01'), endDate: new Date('2020-01-02'), isRegistrationOpen: false
+  } : null,
+  unlockCheckpoint: startCheckpoint,
+  lockCheckpoint: stopCheckpoint
+}));
 mock.module('@/lib/db/registration', () => ({
   rowToRegistration: () => registration,
   checkInParticipantAtCheckpoint: updateRegistration
 }));
 
 const { POST } = await import('../src/app/api/events/check-in/route');
+const { POST: manageCheckpoint } = await import('../src/app/api/events/[id]/unlock-checkpoint/route');
+const { GET: listVolunteers } = await import('../src/app/api/volunteers/route');
+const { POST: assignVolunteer } = await import('../src/app/api/volunteer/create/route');
+const list = () => listVolunteers(new Request('http://localhost/api/volunteers?eventId=event'));
+const routeParams = { params: Promise.resolve({ id: 'event' }) };
+const control = (checkpoint: unknown, action: unknown) => manageCheckpoint(new NextRequest('http://localhost/api/events/event/unlock-checkpoint', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ checkpoint, action })
+}), routeParams);
+const assign = (body: unknown = { userId: 'participant' }) => assignVolunteer(new Request('http://localhost/api/volunteer/create', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventId: 'event', ...body as Record<string, unknown> })
+}));
 const scan = (checkpoint: string, approval?: unknown) => POST(new Request('http://localhost/api/events/check-in', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -39,9 +80,146 @@ const scan = (checkpoint: string, approval?: unknown) => POST(new Request('http:
 
 beforeEach(() => {
   authenticated = authorized = validQR = true;
+  userExists = eventExists = true;
+  role = 'admin';
+  userRole = 'participant';
+  organizerId = undefined;
+  unlockedCheckpoints = ['Checkin', 'Lunch', 'Dinner'];
   registration = { ...registration, status: 'approved', checkpointCheckIns: [] };
   updateRegistration.mockClear();
   execute.mockClear();
+  promoteVolunteer.mockClear();
+  assignOrganizer.mockClear();
+  organizerVolunteers.mockClear();
+  startCheckpoint.mockClear();
+  stopCheckpoint.mockClear();
+});
+
+describe('manual checkpoint controls', () => {
+  test('admins can start and stop checkpoints outside event dates', async () => {
+    expect((await control('Dinner', 'unlock')).status).toBe(200);
+    expect(startCheckpoint).toHaveBeenCalledWith('event', 'Dinner');
+    expect((await control('Dinner', 'lock')).status).toBe(200);
+    expect(stopCheckpoint).toHaveBeenCalledWith('event', 'Dinner');
+  });
+
+  test('non-owner organizers and volunteers cannot change checkpoint state', async () => {
+    role = 'organizer';
+    expect((await control('Dinner', 'unlock')).status).toBe(403);
+    role = 'volunteer';
+    expect((await control('Dinner', 'lock')).status).toBe(403);
+    expect(startCheckpoint).not.toHaveBeenCalled();
+    expect(stopCheckpoint).not.toHaveBeenCalled();
+  });
+
+  test('invalid checkpoints and actions never mutate state', async () => {
+    expect((await control('Unknown', 'lock')).status).toBe(400);
+    expect((await control(123, 'unlock')).status).toBe(400);
+    expect((await control('Dinner', 'invalid')).status).toBe(400);
+    expect(startCheckpoint).not.toHaveBeenCalled();
+    expect(stopCheckpoint).not.toHaveBeenCalled();
+  });
+
+  test('stopped checkpoints reject scans and skipped-checkpoint overrides for all roles', async () => {
+    unlockedCheckpoints = [];
+    for (const scannerRole of ['admin', 'organizer', 'volunteer']) {
+      role = scannerRole;
+      expect((await scan('Dinner', true)).status).toBe(403);
+    }
+    expect(updateRegistration).not.toHaveBeenCalled();
+    unlockedCheckpoints = ['Dinner'];
+    expect(await (await scan('Dinner', true)).json()).toMatchObject({ success: true });
+  });
+});
+
+describe('event volunteers', () => {
+  test('admins add volunteers through existing roles after event start and registration closure', async () => {
+    const response = await assign();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ success: true, user: { role: 'volunteer', organizerId: 'owner' } });
+    expect(promoteVolunteer).toHaveBeenCalledWith('participant', 'volunteer', 'owner');
+    expect(assignOrganizer).not.toHaveBeenCalled();
+  });
+
+  test('event volunteer list uses the existing organizer association', async () => {
+    userRole = 'volunteer';
+    organizerId = 'owner';
+    const response = await list();
+    expect(await response.json()).toMatchObject({ volunteers: [currentUser()] });
+    expect(organizerVolunteers).toHaveBeenCalledWith('owner');
+  });
+
+  test('unauthorized users and non-owner organizers cannot manage event volunteers', async () => {
+    for (const otherRole of ['organizer', 'volunteer', 'participant', 'applicant']) {
+      role = otherRole;
+      expect((await assign()).status).toBe(403);
+      expect((await list()).status).toBe(403);
+    }
+    authenticated = false;
+    expect((await assign()).status).toBe(401);
+    expect(promoteVolunteer).not.toHaveBeenCalled();
+  });
+
+  test('invalid users and events cannot be assigned', async () => {
+    expect((await assign({ userId: '' })).status).toBe(400);
+    expect((await assign({ userId: 123 })).status).toBe(400);
+    userExists = false;
+    expect((await assign()).status).toBe(404);
+    userExists = true;
+    eventExists = false;
+    expect((await assign()).status).toBe(404);
+    expect(promoteVolunteer).not.toHaveBeenCalled();
+  });
+
+  test('volunteer creation cannot overwrite staff roles', async () => {
+    for (const otherRole of ['admin', 'organizer', 'mentor']) {
+      userRole = otherRole;
+      expect((await assign()).status).toBe(400);
+    }
+    expect(promoteVolunteer).not.toHaveBeenCalled();
+  });
+
+  test('volunteer creation does not replace existing scanner authorization', async () => {
+    expect((await assign()).status).toBe(200);
+    authorized = false;
+    expect((await scan('Dinner', true)).status).toBe(403);
+    expect(updateRegistration).not.toHaveBeenCalled();
+  });
+
+  test('applicants and existing volunteers use the same role and organizer helpers', async () => {
+    for (const eligibleRole of ['applicant', 'volunteer']) {
+      userRole = eligibleRole;
+      expect((await assign()).status).toBe(200);
+      expect(userRole).toBe('volunteer');
+      expect(organizerId).toBe('owner');
+    }
+  });
+
+  test('legacy volunteer creation still works without an event and keeps organizer links', async () => {
+    organizerId = 'existing-owner';
+    const response = await assignVolunteer(new Request('http://localhost/api/volunteer/create', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: 'participant' })
+    }));
+    expect(await response.json()).toMatchObject({ success: true, user: { role: 'volunteer', organizerId: 'existing-owner' } });
+    expect(assignOrganizer).not.toHaveBeenCalled();
+  });
+
+  test('failed atomic promotion returns an error without a separate assignment write', async () => {
+    organizerId = 'existing-owner';
+    promoteVolunteer.mockImplementationOnce(async () => { throw new Error('Organizer assignment rejected'); });
+    const errorLog = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await assign();
+      expect(response.status).toBe(500);
+      expect(await response.json()).toMatchObject({ error: 'Failed to create volunteer' });
+      expect(userRole).toBe('participant');
+      expect(organizerId).toBe('existing-owner');
+      expect(promoteVolunteer).toHaveBeenCalledTimes(1);
+      expect(assignOrganizer).not.toHaveBeenCalled();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
 });
 
 describe('checkpoint approval', () => {

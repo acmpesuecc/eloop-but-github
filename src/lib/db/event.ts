@@ -220,24 +220,27 @@ export async function unlockCheckpoint(eventId: string, checkpoint: string): Pro
   const event = await getEventById(eventId);
   if (!event) return null;
 
-  const unlockedCheckpoints = event.unlockedCheckpoints || ["Checkin"];
-
   // Check if checkpoint exists in event's checkpoint list
   if (!event.checkpoints?.includes(checkpoint)) {
     throw new Error('Checkpoint does not exist in this event');
   }
 
   // Check if already unlocked
-  if (unlockedCheckpoints.includes(checkpoint)) {
-    return event; // Already unlocked
-  }
+  // Already unlocked
+  // Repeated starts are idempotent and still normalize the active checkpoint list.
 
   // Add to unlocked list
-  unlockedCheckpoints.push(checkpoint);
-
+  // The update uses the current database value, not a stale client-side list.
   await turso.execute({
-    sql: `UPDATE events SET unlocked_checkpoints = ?, updated_at = ? WHERE id = ?`,
-    args: [JSON.stringify(unlockedCheckpoints), Date.now(), eventId]
+    sql: `UPDATE events
+          SET unlocked_checkpoints = (
+            SELECT json_group_array(value) FROM (
+              SELECT value FROM json_each(COALESCE(events.unlocked_checkpoints, '[]'))
+              WHERE (? = 'Checkin' OR value = 'Checkin') AND value != ?
+              UNION SELECT ? AS value
+            )
+          ), updated_at = ? WHERE id = ?`,
+    args: [checkpoint, checkpoint, checkpoint, Date.now(), eventId]
   });
 
   return getEventById(eventId);
@@ -248,14 +251,18 @@ export async function lockCheckpoint(eventId: string, checkpoint: string): Promi
   const event = await getEventById(eventId);
   if (!event) return null;
 
-  const unlockedCheckpoints = event.unlockedCheckpoints || ["Checkin"];
+  if (!event.checkpoints?.includes(checkpoint)) {
+    throw new Error('Checkpoint does not exist in this event');
+  }
 
   // Remove from unlocked list
-  const updatedUnlocked = unlockedCheckpoints.filter(cp => cp !== checkpoint);
-
   await turso.execute({
-    sql: `UPDATE events SET unlocked_checkpoints = ?, updated_at = ? WHERE id = ?`,
-    args: [JSON.stringify(updatedUnlocked), Date.now(), eventId]
+    sql: `UPDATE events
+          SET unlocked_checkpoints = (
+            SELECT json_group_array(value)
+            FROM json_each(COALESCE(events.unlocked_checkpoints, '[]')) WHERE value != ?
+          ), updated_at = ? WHERE id = ?`,
+    args: [checkpoint, Date.now(), eventId]
   });
 
   return getEventById(eventId);

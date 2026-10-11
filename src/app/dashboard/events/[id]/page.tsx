@@ -4,6 +4,7 @@ import { useState, useEffect, use } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
+import EventVolunteers from '@/components/events/EventVolunteers';
 
 interface EventDetails {
   id: string;
@@ -161,28 +162,7 @@ export default function EventPage({ params }: PageParams) {
       // If we're unlocking a checkpoint that is NOT the special "Checkin" checkpoint,
       // enforce the rule: only one non-checkin checkpoint may be unlocked at a time.
       // So lock any other unlocked non-checkin checkpoints first.
-      const isUnlocking = !currentlyUnlocked;
-      const SPECIAL_REG_NAME = 'Checkin';
-
-      if (isUnlocking && checkpoint !== SPECIAL_REG_NAME) {
-        const othersToLock = (event.unlockedCheckpoints || []).filter(c => c !== checkpoint && c !== SPECIAL_REG_NAME);
-
-        for (const other of othersToLock) {
-          const lockResp = await fetch(`/api/events/${eventId}/unlock-checkpoint`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ checkpoint: other, action: 'lock' }),
-          });
-
-          if (!lockResp.ok) {
-            const errorData = await lockResp.json().catch(() => ({}));
-            throw new Error(errorData.error || `Failed to lock checkpoint ${other}`);
-          }
-
-          const lockData = await lockResp.json();
-          setEvent(prev => prev ? ({ ...prev, unlockedCheckpoints: lockData.event.unlockedCheckpoints }) : null);
-        }
-      }
+      // The server now applies this rule in one atomic update, without separate lock requests.
 
       // Now toggle the requested checkpoint (either lock or unlock)
       const action = currentlyUnlocked ? 'lock' : 'unlock';
@@ -418,6 +398,8 @@ export default function EventPage({ params }: PageParams) {
         </div>
       )}
 
+      {session?.user?.role === 'admin' && <EventVolunteers key={event.id} eventId={event.id} />}
+
       {/* Checkpoint Access Control - Only for Organizers/Admins */}
       {session?.user?.role && ['admin', 'organizer'].includes(session.user.role) &&
         event.checkpoints && event.checkpoints.length > 0 && (
@@ -425,7 +407,7 @@ export default function EventPage({ params }: PageParams) {
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Checkpoint Access Control</h2>
               <p className="text-sm text-slate-500 mt-1">
-                Unlock checkpoints for volunteers to scan participants. Only one non-registration checkpoint can be active at a time.
+                Start or stop checkpoints manually, regardless of event dates. Stopped checkpoints cannot accept scans. Only one non-registration checkpoint can be active at a time.
               </p>
             </div>
 
@@ -434,17 +416,10 @@ export default function EventPage({ params }: PageParams) {
                 const isUnlocked = event.unlockedCheckpoints?.includes(checkpoint) ?? false;
 
                 return (
-                  <label
+                  <div
                     key={checkpoint}
                     className="flex items-center p-4 border border-slate-200 rounded-xl hover:bg-slate-50 cursor-pointer transition-colors"
                   >
-                    <input
-                      type="checkbox"
-                      checked={isUnlocked}
-                      onChange={() => handleCheckpointToggle(checkpoint, isUnlocked)}
-                      disabled={!!actionLoading}
-                      className="h-5 w-5 text-indigo-600 rounded focus:ring-2 focus:ring-indigo-500 cursor-pointer disabled:opacity-50"
-                    />
                     <div className="ml-4 flex-1">
                       <div className="flex items-center gap-3">
                         <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-indigo-100 text-sm font-semibold text-indigo-700">
@@ -453,12 +428,20 @@ export default function EventPage({ params }: PageParams) {
                         <div>
                           <span className="font-medium text-slate-900">{checkpoint}</span>
                           <span className={`ml-3 text-sm font-medium ${isUnlocked ? 'text-emerald-600' : 'text-slate-500'}`}>
-                            {isUnlocked ? 'Unlocked' : 'Locked'}
+                            {isUnlocked ? 'Started' : 'Stopped'}
                           </span>
                         </div>
                       </div>
                     </div>
-                  </label>
+                    <button
+                      onClick={() => handleCheckpointToggle(checkpoint, isUnlocked)}
+                      disabled={!!actionLoading}
+                      aria-label={`${isUnlocked ? 'Stop' : 'Start'} ${checkpoint}`}
+                      className={`px-4 py-2 rounded-lg text-white disabled:opacity-50 ${isUnlocked ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+                    >
+                      {actionLoading === checkpoint ? 'Updating...' : isUnlocked ? 'Stop' : 'Start'}
+                    </button>
+                  </div>
                 );
               })}
             </div>

@@ -103,8 +103,8 @@ export default function CheckInPage() {
           }) => ({
             id: event.id,
             name: event.name,
-            checkpoints: event.checkpoints || ['Registration', 'Lunch', 'Dinner'],
-            unlockedCheckpoints: event.unlockedCheckpoints || ['Registration']
+            checkpoints: event.checkpoints || ['Checkin'],
+            unlockedCheckpoints: event.unlockedCheckpoints || []
           }));
 
           setAvailableEvents(eventList);
@@ -113,23 +113,21 @@ export default function CheckInPage() {
           setSelectedEvent(eventList[0].id);
 
           // Volunteers: only show unlocked checkpoints
-          // Organizers: show all checkpoints
-          const checkpointsToShow = isOrganizer
-            ? eventList[0].checkpoints
-            : eventList[0].unlockedCheckpoints;
+          // Organizers: show all checkpoints that are currently unlocked as well.
+          const checkpointsToShow = eventList[0].unlockedCheckpoints;
 
           setAvailableCheckpoints(checkpointsToShow);
-          setSelectedCheckpoint(checkpointsToShow[0]);
+          setSelectedCheckpoint(checkpointsToShow[0] || '');
         } else {
           // Fallback to default
-          setAvailableCheckpoints(['Registration']);
-          setSelectedCheckpoint('Registration');
+          setAvailableCheckpoints([]);
+          setSelectedCheckpoint('');
         }
       } catch (err) {
         console.error('Error fetching events:', err);
         // Fallback to default checkpoints
-        setAvailableCheckpoints(['Registration', 'Lunch', 'Dinner']);
-        setSelectedCheckpoint('Registration');
+        setAvailableCheckpoints([]);
+        setSelectedCheckpoint('');
       } finally {
         setLoadingCheckpoints(false);
       }
@@ -138,9 +136,9 @@ export default function CheckInPage() {
     fetchEvents();
   }, [isOrganizer]);
 
-  // Poll for checkpoint updates (for volunteers only)
+  // Poll for checkpoint updates (for volunteers only previously; now for all scanner roles)
   useEffect(() => {
-    if (isOrganizer || !selectedEvent) return;
+    if (!selectedEvent) return;
 
     const pollCheckpoints = async () => {
       try {
@@ -153,17 +151,17 @@ export default function CheckInPage() {
         const currentCheckpoints = JSON.stringify(event.unlockedCheckpoints || []);
 
         // If checkpoints changed, update UI and show notification
-        if (lastCheckpointUpdate && lastCheckpointUpdate !== currentCheckpoints) {
-          const updatedEvent = availableEvents.find(e => e.id === selectedEvent);
-          if (updatedEvent) {
-            updatedEvent.unlockedCheckpoints = event.unlockedCheckpoints || [];
-            setAvailableEvents([...availableEvents]);
-          }
+        const knownCheckpoints = lastCheckpointUpdate || JSON.stringify(
+          availableEvents.find(e => e.id === selectedEvent)?.unlockedCheckpoints || []
+        );
+        if (knownCheckpoints !== currentCheckpoints) {
+          setAvailableEvents(previous => previous.map(availableEvent => availableEvent.id === selectedEvent
+            ? { ...availableEvent, unlockedCheckpoints: event.unlockedCheckpoints || [] }
+            : availableEvent));
 
           setAvailableCheckpoints(event.unlockedCheckpoints || []);
-          if (event.unlockedCheckpoints && event.unlockedCheckpoints.length > 0) {
-            setSelectedCheckpoint(event.unlockedCheckpoints[0]);
-          }
+          setSelectedCheckpoint(previous => (event.unlockedCheckpoints || []).includes(previous)
+            ? previous : event.unlockedCheckpoints?.[0] || '');
 
           // Visual feedback for checkpoint change
           playSuccessSound();
@@ -194,13 +192,11 @@ export default function CheckInPage() {
     const event = availableEvents.find(e => e.id === eventId);
     if (event) {
       // Volunteers: only show unlocked checkpoints
-      // Organizers: show all checkpoints
-      const checkpointsToShow = isOrganizer
-        ? event.checkpoints
-        : event.unlockedCheckpoints;
+      // Organizers: show all checkpoints that are currently unlocked as well.
+      const checkpointsToShow = event.unlockedCheckpoints;
 
       setAvailableCheckpoints(checkpointsToShow);
-      setSelectedCheckpoint(checkpointsToShow[0]);
+      setSelectedCheckpoint(checkpointsToShow[0] || '');
       // Reset scanner with new key when changing events (this will reset camera)
       setScannerKey(prev => prev + 1);
       // Reset polling state for new event
@@ -258,7 +254,7 @@ export default function CheckInPage() {
     checkpoint = selectedCheckpoint,
     approveSkippedCheckpoints = false
   ) => {
-    if (processingRef.current || (pendingApproval && !approveSkippedCheckpoints)) return;
+    if (!checkpoint || processingRef.current || (pendingApproval && !approveSkippedCheckpoints)) return;
     processingRef.current = true;
 
     try {
@@ -418,7 +414,7 @@ export default function CheckInPage() {
             ) : availableCheckpoints.length === 0 ? (
               <div className="text-center py-6 px-4 bg-slate-50 rounded-xl">
                 <p className="text-slate-600 text-sm">No checkpoints available</p>
-                <p className="text-xs text-slate-400 mt-1">Waiting for organizer to unlock checkpoints</p>
+                <p className="text-xs text-slate-400 mt-1">Waiting for an admin or the event organizer to start a checkpoint</p>
               </div>
             ) : (
               <div className="space-y-3">
@@ -489,7 +485,7 @@ export default function CheckInPage() {
               onScan={(qrData) => handleScan(qrData)}
               scannerTitle="Check-In Scanner"
               scannerDescription="Position QR code within frame"
-              isActive={isScanning}
+              isActive={isScanning && !!selectedCheckpoint}
             />
           </div>
 

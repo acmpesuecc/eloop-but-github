@@ -199,15 +199,18 @@ export async function getApplicantsWithoutRegistrationsForEvent(eventId: string)
 }
 
 // Update a user's role
-export async function updateUserRole(userId: string, newRole: UserRole): Promise<UserProfile | null> {
+export async function updateUserRole(userId: string, newRole: UserRole, organizerId?: string): Promise<UserProfile | null> {
   const now = Date.now();
+  // Volunteer promotion and optional organizer assignment share one atomic update.
+  // Other role changes and calls without an organizer preserve the existing association.
+  const assignOrganizer = newRole === 'volunteer' && organizerId !== undefined;
   await turso.execute({
     sql: `
       UPDATE users 
-      SET role = ?, updated_at = ?
+      SET role = ?, ${assignOrganizer ? 'organizer_id = ?, ' : ''}updated_at = ?
       WHERE id = ?
     `,
-    args: [newRole, now, userId]
+    args: assignOrganizer ? [newRole, organizerId, now, userId] : [newRole, now, userId]
   });
 
   return getUserById(userId);

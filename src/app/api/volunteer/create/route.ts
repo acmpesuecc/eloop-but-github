@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
-import { updateUserRole, assignVolunteerToOrganizer } from '@/lib/db/user';
+import { updateUserRole, getUserById } from '@/lib/db/user';
 import { hasOrganizerPrivileges } from '@/lib/db/user';
+import { getEventById } from '@/lib/db/event';
 
 // Create volunteer account
 export async function POST(request: Request) {
@@ -26,30 +27,51 @@ export async function POST(request: Request) {
     }
     
     // Parse request body
-    const body = await request.json();
-    const { userId } = body;
+    const body = await request.json().catch(() => null);
+    const { userId, eventId } = body || {};
     
-    if (!userId) {
+    if (typeof userId !== 'string' || !userId.trim()) {
       return NextResponse.json(
         { error: 'User ID is required' },
         { status: 400 }
       );
     }
+
+    let organizerId = session.user.role === 'admin' ? undefined : session.user.id;
+    if (eventId !== undefined) {
+      if (typeof eventId !== 'string' || !eventId.trim()) {
+        return NextResponse.json({ error: 'Invalid event ID' }, { status: 400 });
+      }
+      const event = await getEventById(eventId);
+      if (!event) {
+        return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+      }
+      if (session.user.role !== 'admin' && event.organizerId !== session.user.id) {
+        return NextResponse.json({ error: 'Only the event organizer or an admin can add volunteers' }, { status: 403 });
+      }
+      organizerId = event.organizerId;
+    }
+
+    const existingUser = await getUserById(userId);
+    if (!existingUser) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+    if (!['applicant', 'participant', 'volunteer'].includes(existingUser.role)) {
+      return NextResponse.json({ error: 'Cannot change admin, organizer, or mentor roles through volunteer creation' }, { status: 400 });
+    }
+    if (userId === session.user.id) {
+      return NextResponse.json({ error: 'Cannot change your own role' }, { status: 400 });
+    }
     
     // Update user role to volunteer
-    const volunteerUser = await updateUserRole(userId, 'volunteer');
+    // Assign volunteer to this organizer
+    const volunteerUser = await updateUserRole(userId, 'volunteer', organizerId);
     
     if (!volunteerUser) {
       return NextResponse.json(
         { error: 'User not found' },
         { status: 404 }
       );
-    }
-    
-    // Assign volunteer to this organizer
-    const organizerId = session.user.role === 'admin' ? null : session.user.id;
-    if (organizerId) {
-      await assignVolunteerToOrganizer(userId, organizerId);
     }
     
     return NextResponse.json({
@@ -59,7 +81,7 @@ export async function POST(request: Request) {
         name: volunteerUser.name,
         email: volunteerUser.email,
         role: volunteerUser.role,
-        organizerId: organizerId || undefined
+        organizerId: volunteerUser.organizerId
       }
     });
   } catch (error) {

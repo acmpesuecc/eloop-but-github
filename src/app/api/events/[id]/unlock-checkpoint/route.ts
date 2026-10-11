@@ -30,7 +30,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const body = await request.json();
     const { checkpoint, action } = body; // action: 'unlock' or 'lock'
     
-    if (!checkpoint) {
+    if (typeof checkpoint !== 'string' || !checkpoint.trim()) {
       return NextResponse.json(
         { error: 'Checkpoint is required' },
         { status: 400 }
@@ -44,6 +44,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         { error: 'Event not found' },
         { status: 404 }
       );
+    }
+
+    if (session.user.role === 'organizer' && event.organizerId !== session.user.id) {
+      return NextResponse.json({ error: 'Only the event organizer or an admin can manage checkpoints' }, { status: 403 });
+    }
+    if (!event.checkpoints?.includes(checkpoint)) {
+      return NextResponse.json({ error: 'Checkpoint does not exist in this event' }, { status: 400 });
     }
     
     let updatedEvent;
