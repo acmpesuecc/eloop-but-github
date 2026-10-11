@@ -17,7 +17,7 @@ const envFiles = [
 for (const file of envFiles) {
   const filePath = path.resolve(process.cwd(), file);
   if (fs.existsSync(filePath)) {
-    config({ path: filePath, override: true });
+    config({ path: filePath, override: true, quiet: false });
     console.log(`Loaded env file: ${file}`);
   }
 }

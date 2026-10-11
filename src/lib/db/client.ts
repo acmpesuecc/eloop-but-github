@@ -10,7 +10,7 @@ for (const f of envFiles) {
   const p = path.resolve(process.cwd(), f);
   if (fs.existsSync(p)) {
     try {
-      loadDotenv({ path: p, override: false });
+      loadDotenv({ path: p, override: false, quiet: false });
     } catch (e) {
     }
   }
