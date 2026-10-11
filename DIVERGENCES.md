@@ -83,6 +83,12 @@ For existing databases, `scripts/check-and-init-db.js` invokes `initDatabase()` 
 
 Existing column values, rows, user roles, organizer associations, and checkpoint state are not rewritten. Missing columns receive the defaults listed above. No columns or tables are dropped or renamed; no `event_volunteers` table is created or used. Rollback can leave added columns, tables, and indexes in place without removing data.
 
+## Lint tooling compatibility
+
+ESLint uses the supported 9.x release line instead of 10.x because the installed React, import, and accessibility plugins do not support ESLint 10. `eslint.config.mjs` imports Next.js 16's native flat configs directly instead of passing them through the legacy `FlatCompat` adapter. The direct `typescript-eslint` dependency replaces the separate parser/plugin declarations and keeps Next's lint configuration on a release supporting TypeScript 6. The unused direct `@eslint/eslintrc` dependency is removed.
+
+Lint rules remain enabled. The configuration crash is fixed, but the existing application code still reports 58 errors and 47 warnings at the time of the tooling repair. `bun run lint` exits with code 1 for these findings, not an initialization error; application-wide lint cleanup is separate from this compatibility fix.
+
 ## Validation
 
 ```bash
@@ -90,8 +96,9 @@ bun test
 bun tests/event-controls-db.ts
 bun tests/auth-regression.ts
 bun tests/schema-regression.ts
+bun tests/lint-config.ts
 bunx tsc --noEmit
 bun run build
 ```
 
-The standalone database checks use temporary local databases, not the configured application database. Lint is currently blocked by the existing ESLint dependency incompatibility (`Class extends value undefined is not a constructor or null`).
+The standalone database checks use temporary local databases, not the configured application database. `bun tests/lint-config.ts` checks that the installed linter loads the native configs, parses TypeScript, enforces rules, and ignores generated files. Run `bun run lint` to review the remaining source findings.
