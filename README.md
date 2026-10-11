@@ -1,6 +1,6 @@
 # [eloop](https://hsp-ec.xyz/eloop) — An Event Management Platform
 
-A lightweight, serverless event-management frontend built with Next.js. Supports hierarchical roles, dynamic registration forms, and QR-based check-ins. This repository is maintained by [HSP](https://hsp-ec.xyz).
+A lightweight, serverless event-management frontend built with Next.js. Supports hierarchical roles, dynamic registration forms, and QR-based check-ins. This repository was forked from [HSP](https://hsp-ec.xyz) by [ACM PESUECC](https://pesuecc.acm.org).
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fhomebrew-ec-foss%2Feloop)
 
